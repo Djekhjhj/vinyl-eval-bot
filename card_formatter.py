@@ -1,0 +1,101 @@
+import html
+import uuid
+import time
+from typing import Dict, Tuple
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from models import VinylRelease
+
+class ReleaseStore:
+    """Хранилище карточек в памяти с TTL для безопасных callback_data в Telegram (лимит 64 байта)."""
+    def __init__(self, ttl_seconds: int = 86400):
+        self._store: Dict[str, Tuple[float, VinylRelease]] = {}
+        self.ttl = ttl_seconds
+
+    def save(self, release: VinylRelease) -> str:
+        self._cleanup()
+        rel_id = uuid.uuid4().hex[:12]
+        self._store[rel_id] = (time.time(), release)
+        return rel_id
+
+    def get(self, rel_id: str) -> VinylRelease | None:
+        item = self._store.get(rel_id)
+        if item:
+            return item[1]
+        return None
+
+    def _cleanup(self):
+        now = time.time()
+        expired = [k for k, (t, _) in self._store.items() if now - t > self.ttl]
+        for k in expired:
+            del self._store[k]
+
+release_store = ReleaseStore()
+
+def format_price(val: int) -> str:
+    """Форматирует число с разделителем тысяч, например 7 500."""
+    return f"{val:,}".replace(",", " ")
+
+def format_card_html(release: VinylRelease) -> str:
+    """Формирует презентабельное HTML-сообщение карточки для Telegram."""
+    artist = html.escape(release.artist)
+    album = html.escape(release.album)
+    label = html.escape(release.label)
+    year = html.escape(release.year)
+    catno = html.escape(release.catno)
+    matrix = html.escape(release.matrix)
+    sleeve = html.escape(release.condition_sleeve)
+    vinyl = html.escape(release.condition_vinyl)
+    liquidity_text = html.escape(release.liquidity_text)
+    verdict = html.escape(release.verdict)
+
+    median_str = format_price(release.price_rub_median)
+    min_str = format_price(release.price_rub_min)
+    max_str = format_price(release.price_rub_max)
+
+    text = (
+        f"💿 <b>{artist} — {album}</b>\n\n"
+        f"🏢 <b>Лейбл:</b> {label} | <b>Год:</b> {year}\n"
+        f"🏷️ <b>Каталожный №:</b> <code>{catno}</code>\n"
+        f"🔍 <b>Матрица со сбега:</b> <code>{matrix}</code>\n"
+        f"📦 <b>Состояние:</b> Конверт: <b>{sleeve}</b> | Винил: <b>{vinyl}</b>\n\n"
+        f"💰 <b>Цена в РФ:</b> <b>{median_str} ₽</b> (коридор: {min_str} – {max_str} ₽)\n"
+        f"📈 <b>Ликвидность:</b> {release.liquidity_stars} <i>{liquidity_text}</i>\n\n"
+        f"⚖️ <b>Вердикт:</b>\n{verdict}"
+    )
+    return text
+
+def create_card_keyboard(rel_id: str, short_title: str) -> InlineKeyboardMarkup:
+    # Ограничиваем длину названия на кнопке, чтобы не обрезалось Telegram UI
+    btn_text = f"➕ В таблицу: {short_title}"
+    if len(btn_text) > 40:
+        btn_text = btn_text[:37] + "..."
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=btn_text,
+                    callback_data=f"save:{rel_id}"
+                )
+            ]
+        ]
+    )
+    return keyboard
+
+def create_saved_keyboard(short_title: str) -> InlineKeyboardMarkup:
+    """Клавиатура после успешного сохранения."""
+    btn_text = f"✅ Добавлено: {short_title}"
+    if len(btn_text) > 40:
+        btn_text = btn_text[:37] + "..."
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=btn_text,
+                    callback_data="already_saved"
+                )
+            ]
+        ]
+    )
+    return keyboard

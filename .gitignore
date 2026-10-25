@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+saved_records.jsonl
+service_account.json
+.env
