@@ -3,8 +3,8 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-    AITUNNEL_KEY: str = os.getenv("AITUNNEL_KEY", "")
+    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "8529165360:AAF-L_DTZ3f6S-hppJNzaW9X4pqMtWUJe_c")
+    AITUNNEL_KEY: str = os.getenv("AITUNNEL_KEY", "sk-aitunnel-qeuouwWXHwYtJmmartJ6xlCEvSbAEBaG")
     AITUNNEL_URL: str = os.getenv("AITUNNEL_URL", "https://api.aitunnel.ru/v1/chat/completions")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     
