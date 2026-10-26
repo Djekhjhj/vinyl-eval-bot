@@ -1,10 +1,11 @@
+from __future__ import annotations
 import asyncio
 import base64
 import io
 import json
 import logging
 import re
-from typing import List, Optional
+from typing import List, Optional, Callable, Coroutine, Any
 import aiohttp
 from PIL import Image
 
