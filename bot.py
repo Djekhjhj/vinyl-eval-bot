@@ -13,6 +13,7 @@ import aiohttp
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from config import config
 from models import VinylRelease, AnalysisResponse
@@ -71,7 +72,7 @@ async def cmd_start(message: types.Message):
         "1. Сфотографируйте пластинки и отправьте мне пачку из <b>1–10 фото</b> (альбомом или подряд).\n"
         "2. Вы можете отправить обе стороны одной пластинки и матрицу со сбега — нейросеть объединит их в одну карточку.\n"
         "3. Если вы отправите фото разных пластинок — я разделю их на отдельные карточки.\n"
-        "4. Под каждой карточкой будет кнопка <code>➕ В таблицу</code> для мгновенной фиксации.\n\n"
+        "4. Под каждой карточкой будет ссылка на <b>Discogs</b> и кнопка <code>➕ В таблицу</code>.\n\n"
         "<i>Жду ваши фотографии!</i>"
     )
     await message.answer(welcome_text, parse_mode="HTML")
@@ -81,8 +82,8 @@ async def cmd_help(message: types.Message):
     help_text = (
         "ℹ️ <b>Памятка по оценке:</b>\n\n"
         "• Для точной идентификации старайтесь, чтобы в кадр попадало <b>яблоко (лейбл)</b> и <b>номер матрицы на сбеге (runout groove)</b>.\n"
-        "• Цены рассчитываются на основе реального вторичного рынка РФ (Мешок, Авито, виниловые ярмарки).\n"
-        "• Все фото из одной пачки обрабатываются нейросетью Gemini 3.8 Flash за один проход."
+        "• Цены рассчитываются на основе реального вторичного рынка РФ (Мешок, Авито, виниловые ярмарки) и базы Discogs.\n"
+        "• Все фото из одной пачки обрабатываются нейросетью за один проход."
     )
     await message.answer(help_text, parse_mode="HTML")
 
@@ -127,7 +128,7 @@ async def handle_any_text(message: types.Message):
     reply = (
         "👋 <b>Я на связи и готов оценивать винил!</b>\n\n"
         "📸 <b>Отправьте мне фотографии пластинки</b> (1–10 штук — конверт, яблоко, сбег с матрицей).\n"
-        "Я проанализирую их через Gemini 3.8 Flash, определю пресс, состояние, реальную цену в РФ и ликвидность."
+        "Я определю пресс, проверю релиз на Discogs, рассчитаю реальную цену в РФ и дам экспертный вердикт."
     )
     await message.answer(reply, parse_mode="HTML")
 
@@ -163,7 +164,7 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
 
     status_msg = await bot.send_message(
         chat_id,
-        f"⏳ Собрана пачка из <b>{total_photos} фото</b>. Анализирую через Gemini 3.8 Flash...",
+        f"⏳ Собрана пачка из <b>{total_photos} фото</b>. Анализирую через Gemini Vision...",
         parse_mode="HTML"
     )
 
@@ -231,27 +232,20 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
         logger.error(f"Ошибка при обработке пачки фото в чате {chat_id}: {e}", exc_info=True)
         try:
             await bot.edit_message_text(
-                f"❌ Произошла ошибка при анализе фото: {html_escape(str(e)[:100])}",
+                f"❌ Произошла ошибка при анализе фото: {html_escape(str(e)[:150])}",
                 chat_id=chat_id,
                 message_id=status_msg.message_id
             )
         except Exception:
-            await bot.send_message(chat_id, f"❌ Произошла ошибка при анализе: {str(e)[:100]}")
+            await bot.send_message(chat_id, f"❌ Произошла ошибка при анализе: {str(e)[:150]}")
 
-async def start_health_server():
-    port_str = os.getenv("PORT", "8080")
-    try:
-        port = int(port_str)
-    except ValueError:
-        port = 8080
-
+def build_app(bot: Bot, dp: Dispatcher) -> web.Application:
     app = web.Application()
-    
+
     async def health_handler(request):
         return web.Response(text="Vinyl Evaluator Bot is running 24/7", status=200)
 
     async def diag_handler(request):
-        # Проверяем доступность шлюза AITunnel прямо из контейнера
         aitunnel_status = "unknown"
         try:
             async with aiohttp.ClientSession() as s:
@@ -260,12 +254,19 @@ async def start_health_server():
         except Exception as err:
             aitunnel_status = f"Error: {err}"
 
+        webhook_info = "N/A"
+        try:
+            wh = await bot.get_webhook_info()
+            webhook_info = {"url": wh.url, "pending_count": wh.pending_update_count}
+        except Exception as we:
+            webhook_info = str(we)
+
         diag_data = {
             "status": "online",
             "time": datetime.datetime.now().isoformat(),
             "has_bot_token": bool(config.BOT_TOKEN),
-            "bot_token_prefix": config.BOT_TOKEN[:8] + "...",
             "aitunnel_status": aitunnel_status,
+            "webhook_info": webhook_info,
             "recent_logs": list(recent_logs)
         }
         return web.json_response(diag_data)
@@ -274,11 +275,21 @@ async def start_health_server():
     app.router.add_get("/health", health_handler)
     app.router.add_get("/diag", diag_handler)
 
+    return app
+
+async def start_health_server(bot: Optional[Bot] = None, dp: Optional[Dispatcher] = None):
+    """Вспомогательная функция для запуска health сервера."""
+    if bot is None:
+        bot = Bot(token=config.BOT_TOKEN)
+    if dp is None:
+        dp = Dispatcher(storage=MemoryStorage())
+    app = build_app(bot, dp)
     runner = web.AppRunner(app)
     await runner.setup()
+    port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Health and Diag HTTP сервер запущен на порту {port}")
+    return runner
 
 async def main():
     logger.info("Инициализация Telegram-бота оценки винила...")
@@ -295,27 +306,48 @@ async def main():
 
     photo_buffer.set_callback(batch_callback)
 
+    port_str = os.getenv("PORT", "8080")
     try:
-        await start_health_server()
-    except Exception as e:
-        logger.warning(f"Health server не запущен: {e}")
+        port = int(port_str)
+    except ValueError:
+        port = 8080
 
-    # Обработка сигналов остановки контейнера для мгновенного освобождения Telegram polling
-    import signal
-    loop = asyncio.get_running_loop()
-    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
-        if sig is not None:
-            try:
-                loop.add_signal_handler(sig, lambda: asyncio.create_task(dp.stop_polling()))
-            except (NotImplementedError, RuntimeError):
-                pass
+    app = build_app(bot, dp)
 
-    logger.info("Запуск Long Polling бота...")
-    try:
-        await bot.delete_webhook(drop_pending_updates=False)
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-    finally:
-        await bot.session.close()
+    # Определяем режим: Webhook (для Render/публичного облака) или Long Polling (для локального запуска)
+    public_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("WEBHOOK_URL", "")
+    if public_url:
+        logger.info(f"Запуск в режиме WEBHOOK на базе {public_url}...")
+        webhook_path = "/webhook"
+        full_webhook_url = f"{public_url.rstrip('/')}{webhook_path}"
+
+        webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+        webhook_handler.register(app, path=webhook_path)
+        setup_application(app, dp, bot=bot)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        logger.info(f"HTTP и Webhook сервер запущен на порту {port}")
+
+        await bot.set_webhook(full_webhook_url, drop_pending_updates=False)
+        logger.info(f"Webhook успешно установлен в Telegram: {full_webhook_url}")
+
+        # Держим приложение активным
+        await asyncio.Event().wait()
+    else:
+        logger.info("Запуск в режиме LONG POLLING...")
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+
+        try:
+            await bot.delete_webhook(drop_pending_updates=False)
+            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        finally:
+            await bot.session.close()
 
 if __name__ == "__main__":
     try:
