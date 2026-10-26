@@ -17,6 +17,7 @@ class VinylRelease(BaseModel):
     liquidity_text: str = Field(default="Средняя", description="Текстовая оценка ликвидности и спроса")
     verdict: str = Field(default="", description="Экспертный вердикт: брать/не брать, нюансы тиража")
     photo_indices: List[int] = Field(default_factory=list, description="Номера входящих фото, относящихся к этой пластинке (1..N)")
+    tracklist: List[str] = Field(default_factory=list, description="Список распознанных треков/песен с конверта или яблока")
     discogs_id: Optional[str] = Field(default=None, description="ID релиза в базе Discogs")
     discogs_url: Optional[str] = Field(default=None, description="Прямая ссылка на релиз на Discogs.com")
     discogs_lowest_eur: Optional[float] = Field(default=None, description="Минимальная мировая цена в EUR на Discogs")

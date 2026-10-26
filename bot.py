@@ -209,19 +209,42 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
         await update_status(f"🔍 Найдено изданий: <b>{len(analysis.releases)}</b>. Сверяю с базой Discogs...")
 
         for idx, release in enumerate(analysis.releases, start=1):
-            # Живой поиск пресса в базе Discogs
+            # Живой поиск пресса в базе Discogs по адаптивному каскаду
             try:
                 discogs_info = await discogs_service.search_release(
                     artist=release.artist,
                     album=release.album,
                     catno=release.catno,
-                    matrix=release.matrix
+                    matrix=release.matrix,
+                    label=release.label,
+                    tracklist=release.tracklist
                 )
                 if discogs_info.get("found"):
                     release.discogs_id = str(discogs_info["discogs_id"])
                     release.discogs_url = discogs_info["discogs_url"]
                     release.discogs_lowest_eur = discogs_info.get("lowest_price_eur")
-                    logger.info(f"Discogs релиз найден: #{release.discogs_id} ({release.discogs_url})")
+
+                    # Автоматическая коррекция галлюцинаций нейросети:
+                    # Если точный релиз найден по каталожному номеру (Каскад 1) или треклисту (Каскад 3),
+                    # берем официального артиста и название альбома из базы Discogs
+                    stage = discogs_info.get("cascade_stage")
+                    if stage in ("catno", "tracklist"):
+                        if discogs_info.get("official_artist"):
+                            if release.artist != discogs_info["official_artist"]:
+                                logger.info(
+                                    f"Discogs каскад [{stage}] скорректировал артиста: '{release.artist}' -> '{discogs_info['official_artist']}'"
+                                )
+                                release.artist = discogs_info["official_artist"]
+                        if discogs_info.get("official_album"):
+                            if release.album != discogs_info["official_album"]:
+                                logger.info(
+                                    f"Discogs каскад [{stage}] скорректировал альбом: '{release.album}' -> '{discogs_info['official_album']}'"
+                                )
+                                release.album = discogs_info["official_album"]
+                        if discogs_info.get("year") and release.year in ("Не указан", "Не определен"):
+                            release.year = str(discogs_info["year"])
+
+                    logger.info(f"Discogs релиз найден [{stage}]: #{release.discogs_id} ({release.artist} - {release.album})")
                 elif discogs_info.get("discogs_url"):
                     release.discogs_url = discogs_info["discogs_url"]
             except Exception as err:
