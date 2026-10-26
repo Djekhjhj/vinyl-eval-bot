@@ -300,6 +300,16 @@ async def main():
     except Exception as e:
         logger.warning(f"Health server не запущен: {e}")
 
+    # Обработка сигналов остановки контейнера для мгновенного освобождения Telegram polling
+    import signal
+    loop = asyncio.get_running_loop()
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if sig is not None:
+            try:
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(dp.stop_polling()))
+            except (NotImplementedError, RuntimeError):
+                pass
+
     logger.info("Запуск Long Polling бота...")
     try:
         await bot.delete_webhook(drop_pending_updates=False)
