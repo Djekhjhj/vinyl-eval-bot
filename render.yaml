@@ -10,9 +10,9 @@ services:
     autoDeploy: true
     envVars:
       - key: BOT_TOKEN
-        value: 8529165360:AAF-L_DTZ3f6S-hppJNzaW9X4pqMtWUJe_c
+        sync: false
       - key: AITUNNEL_KEY
-        value: sk-aitunnel-qeuouwWXHwYtJmmartJ6xlCEvSbAEBaG
+        sync: false
       - key: AITUNNEL_URL
         value: https://api.aitunnel.ru/v1/chat/completions
       - key: GEMINI_MODEL
