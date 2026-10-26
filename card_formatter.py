@@ -52,50 +52,69 @@ def format_card_html(release: VinylRelease) -> str:
     min_str = format_price(release.price_rub_min)
     max_str = format_price(release.price_rub_max)
 
+    discogs_line = ""
+    if release.discogs_url:
+        discogs_info = f"#{release.discogs_id}" if release.discogs_id else "Страница поиска"
+        price_eur = f" (мин. €{release.discogs_lowest_eur})" if release.discogs_lowest_eur else ""
+        discogs_line = f"\n🌐 <b>Discogs:</b> <a href=\"{release.discogs_url}\">{discogs_info}</a>{price_eur}\n"
+
     text = (
         f"💿 <b>{artist} — {album}</b>\n\n"
         f"🏢 <b>Лейбл:</b> {label} | <b>Год:</b> {year}\n"
         f"🏷️ <b>Каталожный №:</b> <code>{catno}</code>\n"
         f"🔍 <b>Матрица со сбега:</b> <code>{matrix}</code>\n"
-        f"📦 <b>Состояние:</b> Конверт: <b>{sleeve}</b> | Винил: <b>{vinyl}</b>\n\n"
+        f"📦 <b>Состояние:</b> Конверт: <b>{sleeve}</b> | Винил: <b>{vinyl}</b>\n"
+        f"{discogs_line}\n"
         f"💰 <b>Цена в РФ:</b> <b>{median_str} ₽</b> (коридор: {min_str} – {max_str} ₽)\n"
         f"📈 <b>Ликвидность:</b> {release.liquidity_stars} <i>{liquidity_text}</i>\n\n"
         f"⚖️ <b>Вердикт:</b>\n{verdict}"
     )
     return text
 
-def create_card_keyboard(rel_id: str, short_title: str) -> InlineKeyboardMarkup:
+def create_card_keyboard(rel_id: str, short_title: str, discogs_url: str | None = None) -> InlineKeyboardMarkup:
     # Ограничиваем длину названия на кнопке, чтобы не обрезалось Telegram UI
     btn_text = f"➕ В таблицу: {short_title}"
     if len(btn_text) > 40:
         btn_text = btn_text[:37] + "..."
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=btn_text,
-                    callback_data=f"save:{rel_id}"
-                )
-            ]
-        ]
-    )
-    return keyboard
+    rows = []
+    if discogs_url:
+        rows.append([
+            InlineKeyboardButton(
+                text="🔗 Релиз на Discogs",
+                url=discogs_url
+            )
+        ])
 
-def create_saved_keyboard(short_title: str) -> InlineKeyboardMarkup:
+    rows.append([
+        InlineKeyboardButton(
+            text=btn_text,
+            callback_data=f"save:{rel_id}"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def create_saved_keyboard(short_title: str, discogs_url: str | None = None) -> InlineKeyboardMarkup:
     """Клавиатура после успешного сохранения."""
     btn_text = f"✅ Добавлено: {short_title}"
     if len(btn_text) > 40:
         btn_text = btn_text[:37] + "..."
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=btn_text,
-                    callback_data="already_saved"
-                )
-            ]
-        ]
-    )
-    return keyboard
+    rows = []
+    if discogs_url:
+        rows.append([
+            InlineKeyboardButton(
+                text="🔗 Релиз на Discogs",
+                url=discogs_url
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            text=btn_text,
+            callback_data="already_saved"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)

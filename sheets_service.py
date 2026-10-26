@@ -29,7 +29,8 @@ COLUMNS = [
     "Цена (₽)",
     "Коридор (₽)",
     "Ликвидность",
-    "Экспертный вердикт"
+    "Экспертный вердикт",
+    "Ссылка на Discogs"
 ]
 
 class SheetsService:
@@ -90,7 +91,8 @@ class SheetsService:
             release.price_rub_median,
             f"{release.price_rub_min} - {release.price_rub_max} ₽",
             f"{release.liquidity_stars} {release.liquidity_text}",
-            release.verdict
+            release.verdict,
+            release.discogs_url or ""
         ]
 
         client = self.get_client()

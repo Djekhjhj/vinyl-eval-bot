@@ -18,6 +18,7 @@ from config import config
 from models import VinylRelease, AnalysisResponse
 from batch_buffer import PhotoBatchBuffer
 from vision_service import analyze_photos_batch
+from discogs_service import discogs_service
 from card_formatter import format_card_html, create_card_keyboard, create_saved_keyboard, release_store
 from sheets_service import sheets_service
 
@@ -145,7 +146,7 @@ async def handle_save_to_sheet(query: types.CallbackQuery):
         await query.answer("✅ Добавлено в Google Таблицу!", show_alert=False)
         try:
             await query.message.edit_reply_markup(
-                reply_markup=create_saved_keyboard(release.short_title)
+                reply_markup=create_saved_keyboard(release.short_title, release.discogs_url)
             )
         except Exception:
             pass
@@ -198,9 +199,26 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
             return
 
         for release in analysis.releases:
+            # Живой поиск пресса в базе Discogs
+            try:
+                discogs_info = await discogs_service.search_release(
+                    artist=release.artist,
+                    album=release.album,
+                    catno=release.catno,
+                    matrix=release.matrix
+                )
+                if discogs_info.get("found"):
+                    release.discogs_id = str(discogs_info["discogs_id"])
+                    release.discogs_url = discogs_info["discogs_url"]
+                    release.discogs_lowest_eur = discogs_info.get("lowest_price_eur")
+                elif discogs_info.get("discogs_url"):
+                    release.discogs_url = discogs_info["discogs_url"]
+            except Exception as err:
+                logger.warning(f"Ошибка при поиске в Discogs: {err}")
+
             rel_id = release_store.save(release)
             card_html = format_card_html(release)
-            markup = create_card_keyboard(rel_id, release.short_title)
+            markup = create_card_keyboard(rel_id, release.short_title, release.discogs_url)
 
             await bot.send_message(
                 chat_id,
