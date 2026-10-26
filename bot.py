@@ -24,12 +24,15 @@ from card_formatter import format_card_html, create_card_keyboard, create_saved_
 from sheets_service import sheets_service
 
 # Кольцевой буфер недавних логов для удаленной диагностики через /diag
-recent_logs = collections.deque(maxlen=100)
+recent_logs = collections.deque(maxlen=300)
 
 class MemoryLogHandler(logging.Handler):
     def emit(self, record):
         try:
             msg = self.format(record)
+            # Игнорируем частые health-check пинги от Render, чтобы не забивать буфер логов
+            if "GET /health" in msg:
+                return
             recent_logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
         except Exception:
             pass
@@ -168,6 +171,12 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
         parse_mode="HTML"
     )
 
+    async def update_status(text: str):
+        try:
+            await bot.edit_message_text(text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="HTML")
+        except Exception:
+            pass
+
     try:
         images_bytes: List[bytes] = []
         user_captions: List[str] = []
@@ -184,22 +193,21 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
 
         analysis: AnalysisResponse = await analyze_photos_batch(
             images_bytes=images_bytes,
-            user_caption=combined_caption
+            user_caption=combined_caption,
+            status_callback=update_status
         )
 
-        try:
-            await bot.delete_message(chat_id, status_msg.message_id)
-        except Exception:
-            pass
+        logger.info(f"Gemini вернул {len(analysis.releases)} релизов для чата {chat_id}")
 
         if not analysis.releases:
-            await bot.send_message(
-                chat_id,
+            await update_status(
                 "⚠️ Не удалось распознать виниловые пластинки на отправленных фотографиях. Попробуйте сделать более четкий снимок яблока или конверта."
             )
             return
 
-        for release in analysis.releases:
+        await update_status(f"🔍 Найдено изданий: <b>{len(analysis.releases)}</b>. Сверяю с базой Discogs...")
+
+        for idx, release in enumerate(analysis.releases, start=1):
             # Живой поиск пресса в базе Discogs
             try:
                 discogs_info = await discogs_service.search_release(
@@ -212,6 +220,7 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
                     release.discogs_id = str(discogs_info["discogs_id"])
                     release.discogs_url = discogs_info["discogs_url"]
                     release.discogs_lowest_eur = discogs_info.get("lowest_price_eur")
+                    logger.info(f"Discogs релиз найден: #{release.discogs_id} ({release.discogs_url})")
                 elif discogs_info.get("discogs_url"):
                     release.discogs_url = discogs_info["discogs_url"]
             except Exception as err:
@@ -221,12 +230,32 @@ async def process_photos_batch(chat_id: int, items: List[PhotoItem], bot: Bot):
             card_html = format_card_html(release)
             markup = create_card_keyboard(rel_id, release.short_title, release.discogs_url)
 
-            await bot.send_message(
-                chat_id,
-                card_html,
-                reply_markup=markup,
-                parse_mode="HTML"
-            )
+            try:
+                await bot.send_message(
+                    chat_id,
+                    card_html,
+                    reply_markup=markup,
+                    parse_mode="HTML"
+                )
+            except Exception as send_err:
+                logger.warning(f"Ошибка при отправке карточки с HTML разметкой: {send_err}. Отправляю чистым текстом...")
+                clean_text = (
+                    card_html.replace("<b>", "")
+                    .replace("</b>", "")
+                    .replace("<code>", "")
+                    .replace("</code>", "")
+                    .replace("<i>", "")
+                    .replace("</i>", "")
+                )
+                await bot.send_message(chat_id, clean_text, reply_markup=markup)
+
+            logger.info(f"Карточка {idx}/{len(analysis.releases)} ({release.short_title}) отправлена в чат {chat_id}")
+
+        # Удаляем сообщение о прогрессе только после успешной отправки карточек
+        try:
+            await bot.delete_message(chat_id, status_msg.message_id)
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error(f"Ошибка при обработке пачки фото в чате {chat_id}: {e}", exc_info=True)

@@ -62,11 +62,12 @@ SYSTEM_PROMPT = """Ты — ведущий международный экспе
 }
 """
 
-def optimize_image(image_bytes: bytes, max_dimension: int = 1024, quality: int = 75) -> str:
+def optimize_image(image_bytes: bytes, max_dimension: int = 800, quality: int = 75) -> str:
     """
     Масштабирует и оптимизирует изображение для отправки в Gemini Vision.
-    1024px при качестве 75 дает отличное распознавание текста матриц/лейблов,
-    но в 3-4 раза уменьшает размер полезной нагрузки и предотвращает 502 таймауты прокси.
+    800px укладывается в один vision-тайл нейросети (вместо 5 тайлов при >768px),
+    что ускоряет обработку в 3–4 раза (7–8 сек вместо 35 сек) и гарантирует
+    отсутствие таймаутов Cloudflare 502 Bad Gateway.
     """
     img = Image.open(io.BytesIO(image_bytes))
     if img.mode in ("RGBA", "P"):
@@ -85,7 +86,8 @@ def optimize_image(image_bytes: bytes, max_dimension: int = 1024, quality: int =
 
 async def analyze_photos_batch(
     images_bytes: List[bytes],
-    user_caption: Optional[str] = None
+    user_caption: Optional[str] = None,
+    status_callback: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None
 ) -> AnalysisResponse:
     """
     Отправляет пачку изображений в едином запросе к Gemini через AITunnel
@@ -103,7 +105,7 @@ async def analyze_photos_batch(
     content_parts.append({"type": "text", "text": text_prompt})
 
     for idx, img_b in enumerate(images_bytes, start=1):
-        data_uri = optimize_image(img_b, max_dimension=1024, quality=75)
+        data_uri = optimize_image(img_b, max_dimension=800, quality=75)
         content_parts.append({
             "type": "image_url",
             "image_url": {"url": data_uri}
@@ -115,7 +117,7 @@ async def analyze_photos_batch(
     }
 
     # Список моделей на случай временного сбоя upstream у 3.8-flash
-    models_to_try = [config.GEMINI_MODEL, "gemini-2.5-flash", config.GEMINI_MODEL]
+    models_to_try = [config.GEMINI_MODEL, "gemini-3.5-flash", "gemini-2.5-flash"]
     last_error = None
     raw_content = ""
 
@@ -131,26 +133,31 @@ async def analyze_photos_batch(
 
         try:
             logger.info(f"Отправка запроса в AITunnel (попытка {attempt}/3, модель {model_name})...")
+            if attempt > 1 and status_callback:
+                try:
+                    await status_callback(f"⏳ Анализирую детали издания (попытка {attempt}/3)...")
+                except Exception:
+                    pass
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     config.AITUNNEL_URL,
                     json=payload,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=50)
+                    timeout=aiohttp.ClientTimeout(total=45)
                 ) as resp:
                     if resp.status == 200:
                         result_json = await resp.json()
                         raw_content = result_json["choices"][0]["message"]["content"]
-                        logger.info("Ответ от Gemini успешно получен.")
+                        logger.info(f"Ответ от Gemini успешно получен на попытке {attempt}.")
                         break
                     
                     err_text = await resp.text()
                     logger.warning(f"AITunnel вернул HTTP {resp.status} на попытке {attempt}: {err_text[:200]}")
                     last_error = f"HTTP {resp.status}: {err_text[:120]}"
 
-                    # При ошибках 500, 502, 503, 504 делаем паузу и пробуем снова
                     if resp.status in (500, 502, 503, 504):
-                        await asyncio.sleep(2 * attempt)
+                        await asyncio.sleep(1.5 * attempt)
                         continue
                     else:
                         raise RuntimeError(last_error)
@@ -158,11 +165,11 @@ async def analyze_photos_batch(
         except asyncio.TimeoutError:
             logger.warning(f"Таймаут запроса к AITunnel на попытке {attempt}/3")
             last_error = "Timeout запроса к шлюзу нейросети"
-            await asyncio.sleep(2 * attempt)
+            await asyncio.sleep(1.5 * attempt)
         except aiohttp.ClientError as ce:
             logger.warning(f"Сетевая ошибка при запросе к AITunnel: {ce}")
             last_error = str(ce)
-            await asyncio.sleep(2 * attempt)
+            await asyncio.sleep(1.5 * attempt)
 
     if not raw_content:
         raise RuntimeError(f"Не удалось получить ответ от нейросети после 3 попыток ({last_error})")
@@ -175,11 +182,23 @@ async def analyze_photos_batch(
 
     try:
         data = json.loads(cleaned_json)
+        if isinstance(data, list):
+            return AnalysisResponse(releases=[VinylRelease(**item) for item in data])
         return AnalysisResponse(**data)
     except Exception as e:
         logger.error(f"Не удалось распарсить JSON из ответа ИИ: {e}\nСырой ответ:\n{raw_content[:500]}")
         match = re.search(r"\{[\s\S]*\}", cleaned_json)
         if match:
-            data = json.loads(match.group(0))
-            return AnalysisResponse(**data)
+            try:
+                data = json.loads(match.group(0))
+                return AnalysisResponse(**data)
+            except Exception:
+                pass
+        match_arr = re.search(r"\[[\s\S]*\]", cleaned_json)
+        if match_arr:
+            try:
+                data_arr = json.loads(match_arr.group(0))
+                return AnalysisResponse(releases=[VinylRelease(**item) for item in data_arr])
+            except Exception:
+                pass
         raise

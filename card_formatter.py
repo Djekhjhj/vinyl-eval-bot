@@ -37,16 +37,16 @@ def format_price(val: int) -> str:
 
 def format_card_html(release: VinylRelease) -> str:
     """Формирует презентабельное HTML-сообщение карточки для Telegram."""
-    artist = html.escape(release.artist)
-    album = html.escape(release.album)
-    label = html.escape(release.label)
-    year = html.escape(release.year)
-    catno = html.escape(release.catno)
-    matrix = html.escape(release.matrix)
-    sleeve = html.escape(release.condition_sleeve)
-    vinyl = html.escape(release.condition_vinyl)
-    liquidity_text = html.escape(release.liquidity_text)
-    verdict = html.escape(release.verdict)
+    artist = html.escape(release.artist, quote=False)
+    album = html.escape(release.album, quote=False)
+    label = html.escape(release.label, quote=False)
+    year = html.escape(str(release.year), quote=False)
+    catno = html.escape(release.catno, quote=False)
+    matrix = html.escape(release.matrix, quote=False)
+    sleeve = html.escape(release.condition_sleeve, quote=False)
+    vinyl = html.escape(release.condition_vinyl, quote=False)
+    liquidity_text = html.escape(release.liquidity_text, quote=False)
+    verdict = html.escape(release.verdict, quote=False)
 
     median_str = format_price(release.price_rub_median)
     min_str = format_price(release.price_rub_min)
@@ -54,9 +54,10 @@ def format_card_html(release: VinylRelease) -> str:
 
     discogs_line = ""
     if release.discogs_url:
+        safe_url = html.escape(release.discogs_url, quote=True)
         discogs_info = f"#{release.discogs_id}" if release.discogs_id else "Страница поиска"
         price_eur = f" (мин. €{release.discogs_lowest_eur})" if release.discogs_lowest_eur else ""
-        discogs_line = f"\n🌐 <b>Discogs:</b> <a href=\"{release.discogs_url}\">{discogs_info}</a>{price_eur}\n"
+        discogs_line = f"\n🌐 <b>Discogs:</b> <a href=\"{safe_url}\">{discogs_info}</a>{price_eur}\n"
 
     text = (
         f"💿 <b>{artist} — {album}</b>\n\n"
